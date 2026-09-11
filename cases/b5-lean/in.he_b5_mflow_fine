@@ -1,0 +1,83 @@
+# B5 axisymmetric helium at 4 K; reflecting cap inlet, prescribed MDOT.
+# Pass MDOT (kg/s), FILLN (m^-3), FNUM, DT (s), and STEPS with -var.
+# tools/run_helium.sh provides the student defaults: 4 SCCM, analytic prefill,
+# 100 ns timestep, 12 ms total. Field dumps average non-overlapping 2 ms
+# windows at that timestep; station flux dumps average 0.1 ms windows.
+# SEED defaults below; WEIGHT=radius is the axisymmetric weighting mode.
+# Nested refinement uses 2:1 face transitions, checked by tools/check_grid_2d.py.
+
+variable    SEED index 8675309
+variable    WEIGHT index radius
+seed        ${SEED}
+units       si
+dimension   2
+boundary    o ao p
+global      gridcut 0.0
+create_box  -0.005 0.0926 0 0.0195 -0.5 0.5
+# Nested refinement bands: each level-N band sits inside a level-(N-1) band
+# that is at least four level-(N-1) cells wider on every open side, so the
+# hierarchy steps down 2:1 from the finest stub cell to the 0.4 mm base.
+# L2 = 200 x 195 um : stub buffer, jet, throat buffer
+region      tube_l2 block -0.0055 0.0016 0.0 0.004 -1 1
+region      jet_l2 block 0.0005 0.012 0.0 0.006 -1 1
+region      throat_l2 block 0.0605 0.068 0.0 0.0056 -1 1
+region      level2 union 3 tube_l2 jet_l2 throat_l2
+# L3 = 100 x 97.5 um : stub buffer, plate channel (aperture station x 0.064225)
+region      tube_l3 block -0.0055 0.0008 0.0 0.0032 -1 1
+region      throat_l3 block 0.0615 0.067 0.0 0.004 -1 1
+region      level3 union 2 tube_l3 throat_l3
+# L4 = 50 x 48.75 um : stub to x = 0 (tube station x -0.001975 is mid-cell here)
+region      tube_l4 block -0.0055 0.0 0.0 0.0024 -1 1
+# L5 = 25 x 24.375 um : deepest 2.5 mm of the stub (cap at x -0.0049625)
+region      tube_l5 block -0.0055 -0.0025 0.0 0.0016 -1 1
+create_grid 244 50 1 levels 5 region 2 level2 2 2 1 region 3 level3 2 2 1 &
+            region 4 tube_l4 2 2 1 region 5 tube_l5 2 2 1 inside any
+global      weight cell ${WEIGHT}
+global      mem/limit 1024
+balance_grid rcb cell
+species     he.species He
+mixture     hegas He nrho 1.0e22 temp 4.0
+mixture     fillgas He nrho ${FILLN} temp 4.0
+global      fnum ${FNUM}
+collide     vss hegas he.vss
+read_surf   cell_b5.surf type group cellwalls clip
+surf_collide walls diffuse 4.0 1.0
+surf_collide tp transparent
+surf_modify cellwalls collide walls
+group       cap surf type 2
+read_surf   tube_fwd.surf transparent group tf
+surf_modify tf collide tp
+read_surf   tube_rev.surf transparent group tr
+surf_modify tr collide tp
+read_surf   ap_fwd.surf transparent group af
+surf_modify af collide tp
+read_surf   ap_rev.surf transparent group ar
+surf_modify ar collide tp
+# Pre-fill the cell, stub and channel; the plume starts empty.
+region      gas block -0.0049 0.0650 0.0 0.0195 -1 1
+create_particles fillgas n 0 region gas
+balance_grid rcb part
+fix         bal balance 5000 1.1 rcb time
+global      particle/reorder 100
+fix         src emit/surf hegas cap normal yes mflow ${MDOT} 4.0
+compute     ctf surf tf hegas nflux norm flow
+fix         atf ave/surf tf 10 100 1000 c_ctf[1]
+dump        dtf surf tf 1000 tf.out id f_atf
+compute     ctr surf tr hegas nflux norm flow
+fix         atr ave/surf tr 10 100 1000 c_ctr[1]
+dump        dtr surf tr 1000 tr.out id f_atr
+compute     caf surf af hegas nflux norm flow
+fix         aaf ave/surf af 10 100 1000 c_caf[1]
+dump        daf surf af 1000 af.out id f_aaf
+compute     car surf ar hegas nflux norm flow
+fix         aar ave/surf ar 10 100 1000 c_car[1]
+dump        dar surf ar 1000 ar.out id f_aar
+compute     cg grid all hegas nrho u v
+compute     tg thermal/grid all hegas temp
+fix         ag ave/grid all 10 100 1000 c_cg[*] c_tg[*]
+dump        gd grid all 1000 field.grid id xc yc xlo ylo xhi yhi f_ag[*]
+stats       5000
+stats_style step cpu np nattempt ncoll f_src[1] f_src[2]
+stats_modify flush yes
+timestep    ${DT}
+run         ${STEPS}
