@@ -278,6 +278,10 @@ def main():
     p.add_argument("--outdir", default=".")
     p.add_argument("--frac", type=float, default=0.5)
     p.add_argument("--xrad", type=float, default=0.030)
+    p.add_argument("--surf", default="cell_b5.surf",
+                   help="surf filename (relative to each run dir) to draw as geometry")
+    p.add_argument("--label", default="B5 mflow cell",
+                   help="prefix used in the figure title and output filenames")
     selection = p.add_mutually_exclusive_group()
     selection.add_argument("--timestep", type=int)
     selection.add_argument("--until-step", type=int)
@@ -296,17 +300,17 @@ def main():
         except FieldFormatError as exc:
             raise SystemExit(str(exc)) from exc
         tag = os.path.basename(os.path.normpath(r))
-        surf = surf_by_type(os.path.join(r, "cell_b5.surf"))
+        surf = surf_by_type(os.path.join(r, a.surf))
         ds.append(d)
         tags.append(tag)
-        fields_figure(d, surf, "B5 mflow cell, %s -- mean of %s" %
-                      (tag, frame_label(d)),
-                      os.path.join(a.outdir, "b5-2d-fields-%s.png" % tag))
+        fields_figure(d, surf, "%s, %s -- mean of %s" %
+                      (a.label, tag, frame_label(d)),
+                      os.path.join(a.outdir, "%s-2d-fields-%s.png" % (a.label.split()[0].lower(), tag)))
         report(d, tag)
     if len(ds) == 2:
         compare_figure(ds[0], ds[1], tags[0], tags[1],
-                       surf_by_type(os.path.join(runs[0], "cell_b5.surf")),
-                       os.path.join(a.outdir, "b5-2d-compare.png"), a.xrad)
+                       surf_by_type(os.path.join(runs[0], a.surf)),
+                       os.path.join(a.outdir, "%s-2d-compare.png" % a.label.split()[0].lower()), a.xrad)
 
 
 if __name__ == "__main__":
