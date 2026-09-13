@@ -25,8 +25,9 @@ def main():
     p.add_argument("--frac", type=float, default=0.25)
     p.add_argument("--vmin", type=float, default=-5.0)
     p.add_argument("--vmax", type=float, default=190.0)
-    p.add_argument("--cone-deg", type=float, default=None,
-                   help="mask out cells beyond this half-angle (degrees) from --vertex-x, r=0")
+    p.add_argument("--cone-deg", type=float, default=20.0,
+                   help="mask out cells beyond this half-angle (degrees) from --vertex-x, r=0. "
+                        "Pass --cone-deg -1 (or any negative value) to disable masking entirely.")
     p.add_argument("--vertex-x", type=float, default=0.0535,
                    help="x-position of the cone vertex (default: aperture exit)")
     a = p.parse_args()
@@ -37,7 +38,7 @@ def main():
         raise SystemExit(str(exc)) from exc
     surf = surf_by_type(os.path.join(a.run_dir, a.surf))
     good, verts = verts_and_mirror(d)
-    if a.cone_deg is not None:
+    if a.cone_deg is not None and a.cone_deg >= 0:
         import math
         tan_lim = math.tan(math.radians(a.cone_deg))
         dx = d["xc"][good] - a.vertex_x
@@ -51,7 +52,7 @@ def main():
     mir = lambda arr: np.concatenate([arr[good], arr[good]])[cone_mask] if cone_mask is not None else np.concatenate([arr[good], arr[good]])
 
     box = d["box"]
-    if a.cone_deg is not None:
+    if a.cone_deg is not None and a.cone_deg >= 0:
         import math
         r_max = math.tan(math.radians(a.cone_deg)) * (box[0][1] - a.vertex_x)
         r_max = min(r_max, box[1][1])
@@ -65,7 +66,7 @@ def main():
           r"Velocity component in the x direction (m s$^{-1}$)",
           "jet", surf, box, clim=(a.vmin, a.vmax))
     ax.set_xlabel("x (m)")
-    title_suffix = f" ({a.cone_deg:.0f}deg cone from x={a.vertex_x})" if a.cone_deg is not None else ""
+    title_suffix = f" ({a.cone_deg:.0f}deg cone from x={a.vertex_x})" if (a.cone_deg is not None and a.cone_deg >= 0) else ""
     ax.set_title("4 K He buffer gas, %s -- mean of %s%s" % (os.path.basename(os.path.normpath(a.run_dir)), frame_label(d), title_suffix))
     fig.tight_layout()
     fig.savefig(a.out, dpi=150)
