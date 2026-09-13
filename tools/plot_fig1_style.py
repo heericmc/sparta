@@ -23,6 +23,7 @@ def main():
     p.add_argument("--surf", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--frac", type=float, default=0.25)
+    p.add_argument("--vmin", type=float, default=-5.0)
     p.add_argument("--vmax", type=float, default=190.0)
     a = p.parse_args()
 
@@ -42,7 +43,7 @@ def main():
     fig, ax = plt.subplots(figsize=(width, height))
     panel(ax, fig, verts, mir(d["u"]),
           r"Velocity component in the x direction (m s$^{-1}$)",
-          "jet", surf, d["box"], clim=(0.0, a.vmax))
+          "jet", surf, d["box"], clim=(a.vmin, a.vmax))
     ax.set_xlabel("x (m)")
     ax.set_title("4 K He buffer gas, %s -- mean of %s" % (os.path.basename(os.path.normpath(a.run_dir)), frame_label(d)))
     fig.tight_layout()
