@@ -59,10 +59,24 @@ def average_tail(path, frac=0.5, timestep=None, until_step=None, until_ms=None, 
         if not np.array_equal(fr[:, 0], ids):
             raise SystemExit("grid changed between frames in %s" % path)
     geom = sel[0][:, 1:7]
-    fields = np.mean([fr[:, 7:] for fr in sel], axis=0)
+    # nrho is legitimately averaged per-frame equally (each frame is already a
+    # valid density estimate for its window). But u/v/t are intensive
+    # quantities: a frame where this cell had ~0 particles reports a noisy/
+    # near-zero value for them, and giving that frame equal weight against
+    # well-populated frames systematically biases sparse cells (e.g. near the
+    # symmetry axis) low. So weight u/v/t by each frame's own nrho at that
+    # cell, not by frame count, and exclude cells with zero total weight.
+    stack = np.stack([fr[:, 7:] for fr in sel])  # (nframes, ncells, 4): nrho,u,v,t
+    nrho_frames = stack[:, :, 0]
+    nrho_mean = nrho_frames.mean(axis=0)
+    wsum = nrho_frames.sum(axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        u_mean = np.where(wsum > 0, (nrho_frames * stack[:, :, 1]).sum(axis=0) / wsum, 0.0)
+        v_mean = np.where(wsum > 0, (nrho_frames * stack[:, :, 2]).sum(axis=0) / wsum, 0.0)
+        t_mean = np.where(wsum > 0, (nrho_frames * stack[:, :, 3]).sum(axis=0) / wsum, 0.0)
     d = dict(steps=steps[-k:], box=box, ids=ids, xc=geom[:, 0], yc=geom[:, 1],
              xlo=geom[:, 2], ylo=geom[:, 3], xhi=geom[:, 4], yhi=geom[:, 5],
-              nrho=fields[:, 0], u=fields[:, 1], v=fields[:, 2], t=fields[:, 3],
+              nrho=nrho_mean, u=u_mean, v=v_mean, t=t_mean,
              nframe=len(sel), ntot=len(frames), dt=(resolved_dt(os.path.dirname(path), dt)
                                                     if dt is not None else recorded_dt(os.path.dirname(path))))
     # Per-frame body density, so "converged" vs "still filling" is a number
