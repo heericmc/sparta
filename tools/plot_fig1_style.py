@@ -25,6 +25,10 @@ def main():
     p.add_argument("--frac", type=float, default=0.25)
     p.add_argument("--vmin", type=float, default=-5.0)
     p.add_argument("--vmax", type=float, default=190.0)
+    p.add_argument("--cone-deg", type=float, default=None,
+                   help="mask out cells beyond this half-angle (degrees) from --vertex-x, r=0")
+    p.add_argument("--vertex-x", type=float, default=0.0535,
+                   help="x-position of the cone vertex (default: aperture exit)")
     a = p.parse_args()
 
     try:
@@ -33,9 +37,25 @@ def main():
         raise SystemExit(str(exc)) from exc
     surf = surf_by_type(os.path.join(a.run_dir, a.surf))
     good, verts = verts_and_mirror(d)
-    mir = lambda arr: np.concatenate([arr[good], arr[good]])
+    if a.cone_deg is not None:
+        import math
+        tan_lim = math.tan(math.radians(a.cone_deg))
+        dx = d["xc"][good] - a.vertex_x
+        # keep points upstream of the vertex (dx<=0, e.g. inside the cell/tube) as-is;
+        # downstream of the vertex, mask anything beyond the half-angle cone.
+        within = (dx <= 0) | (np.abs(d["yc"][good]) <= tan_lim * np.maximum(dx, 1e-9))
+        verts = [v for v, k in zip(verts, np.concatenate([within, within])) if k]
+        cone_mask = np.concatenate([within, within])
+    else:
+        cone_mask = None
+    mir = lambda arr: np.concatenate([arr[good], arr[good]])[cone_mask] if cone_mask is not None else np.concatenate([arr[good], arr[good]])
 
     box = d["box"]
+    if a.cone_deg is not None:
+        import math
+        r_max = math.tan(math.radians(a.cone_deg)) * (box[0][1] - a.vertex_x)
+        r_max = min(r_max, box[1][1])
+        box = [box[0], [0.0, r_max]]
     x_span = box[0][1] - box[0][0]
     r_span = 2 * box[1][1]
     height = 6.5
@@ -43,9 +63,10 @@ def main():
     fig, ax = plt.subplots(figsize=(width, height))
     panel(ax, fig, verts, mir(d["u"]),
           r"Velocity component in the x direction (m s$^{-1}$)",
-          "jet", surf, d["box"], clim=(a.vmin, a.vmax))
+          "jet", surf, box, clim=(a.vmin, a.vmax))
     ax.set_xlabel("x (m)")
-    ax.set_title("4 K He buffer gas, %s -- mean of %s" % (os.path.basename(os.path.normpath(a.run_dir)), frame_label(d)))
+    title_suffix = f" ({a.cone_deg:.0f}deg cone from x={a.vertex_x})" if a.cone_deg is not None else ""
+    ax.set_title("4 K He buffer gas, %s -- mean of %s%s" % (os.path.basename(os.path.normpath(a.run_dir)), frame_label(d), title_suffix))
     fig.tight_layout()
     fig.savefig(a.out, dpi=150)
     print("wrote", a.out)
