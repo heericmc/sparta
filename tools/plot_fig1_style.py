@@ -34,7 +34,12 @@ def main():
     good, verts = verts_and_mirror(d)
     mir = lambda arr: np.concatenate([arr[good], arr[good]])
 
-    fig, ax = plt.subplots(figsize=(11, 3.6))
+    box = d["box"]
+    x_span = box[0][1] - box[0][0]
+    r_span = 2 * box[1][1]
+    height = 6.5
+    width = max(6.0, height * x_span / r_span + 2.0)  # +2" for colorbar/labels
+    fig, ax = plt.subplots(figsize=(width, height))
     panel(ax, fig, verts, mir(d["u"]),
           r"Velocity component in the x direction (m s$^{-1}$)",
           "jet", surf, d["box"], clim=(0.0, a.vmax))
