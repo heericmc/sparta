@@ -29,10 +29,6 @@ def main():
                    help="mask out cells beyond this half-angle (degrees) from --vertex-x, r=0")
     p.add_argument("--vertex-x", type=float, default=0.0535,
                    help="x-position of the cone vertex (default: aperture exit)")
-    p.add_argument("--min-nrho", type=float, default=None,
-                   help="drop cells with mean density below this (m^-3) -- removes stray "
-                        "near-empty cells (a rare particle over a long run) that show up as "
-                        "isolated speckles/streaks far from the real jet structure")
     a = p.parse_args()
 
     try:
@@ -40,14 +36,7 @@ def main():
     except FieldFormatError as exc:
         raise SystemExit(str(exc)) from exc
     surf = surf_by_type(os.path.join(a.run_dir, a.surf))
-    if a.min_nrho is not None:
-        good = d["nrho"] > a.min_nrho
-        verts = []
-        for sgn in (1, -1):
-            for lo, blo, hi, bhi in zip(d["xlo"][good], d["ylo"][good], d["xhi"][good], d["yhi"][good]):
-                verts.append([(lo, sgn * blo), (hi, sgn * blo), (hi, sgn * bhi), (lo, sgn * bhi)])
-    else:
-        good, verts = verts_and_mirror(d)
+    good, verts = verts_and_mirror(d)
     if a.cone_deg is not None:
         import math
         tan_lim = math.tan(math.radians(a.cone_deg))
