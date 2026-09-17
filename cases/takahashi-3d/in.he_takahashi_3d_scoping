@@ -1,0 +1,41 @@
+# 3D scoping test: revolved Takahashi single-stage cell (on-axis, same
+# geometry as the validated 2D-axisymmetric case), true 3D DSMC, NO
+# axisymmetric weighting trick. Purpose: measure real throughput
+# (steps/sec) to extrapolate a full run's wall-clock cost, before
+# committing to production-resolution meshing. Simplified vs. the 2D
+# deck: only 2 mesh levels (not 6), no flux-station diagnostics.
+variable    SEED index 8675309
+seed        ${SEED}
+units       si
+dimension   3
+boundary    o o o
+global      gridcut 0.0
+create_box  -0.02 0.1544 -0.06552 0.06552 -0.06552 0.06552
+region      L4 block -0.0045 0.075 -0.00815 0.00815 -0.00815 0.00815
+create_grid 109 126 126 levels 2 region 2 L4 4 4 4 inside any
+balance_grid rcb cell
+global      mem/limit 1900
+species     he.species He
+mixture     hegas He nrho 1.0e22 temp 4.0
+mixture     fillgas He nrho ${FILLN} temp 4.0
+global      fnum ${FNUM}
+collide     vss hegas he.vss
+read_surf   cell_takahashi_3d.surf type group cellwalls clip
+surf_collide walls diffuse 4.0 1.0
+surf_modify cellwalls collide walls
+group       cap surf type 2
+region      gas block -0.0199 0.0535 -0.00715 0.00715 -0.00715 0.00715
+create_particles fillgas n 0 region gas
+balance_grid rcb part
+fix         bal balance 5000 1.1 rcb time
+global      particle/reorder 100
+fix         src emit/surf hegas cap normal yes mflow ${MDOT} 4.0
+compute     cg grid all hegas nrho u v w
+compute     tg thermal/grid all hegas temp
+fix         ag ave/grid all 10 100 1000 c_cg[*] c_tg[*]
+dump        gd grid all 1000 field.grid id xc yc zc xlo ylo zlo xhi yhi zhi f_ag[*]
+stats       200
+stats_style step cpu np nattempt ncoll f_src[1] f_src[2]
+stats_modify flush yes
+timestep    ${DT}
+run         ${STEPS}

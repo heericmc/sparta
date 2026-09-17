@@ -1,0 +1,4 @@
+# Hard-sphere helium: species-ID diameter(m) omega tref(K) alpha.
+# sigma = pi*d^2 = 2e-19 m^2; omega=0.5 and alpha=1 give hard spheres.
+
+He  2.523132522020160e-10  0.50  273.15  1.0

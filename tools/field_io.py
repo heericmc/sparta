@@ -115,15 +115,32 @@ def _parse_frame(path: Path, raw: str, final: bool) -> tuple[Frame, bool]:
     return Frame(step, tuple(bounds), columns, data, raw), partial_tail
 
 
-def read_complete_frames(path: str | Path) -> FrameSet:
-    """Return complete frames, ignoring only an incomplete final frame."""
+def read_complete_frames(path: str | Path, tail_bytes: int | None = None) -> FrameSet:
+    """Return complete frames, ignoring only an incomplete final frame.
+
+    If tail_bytes is given and smaller than the file's size, only that many
+    bytes from the end of the file are read/decoded, and the (possibly
+    truncated) first frame in that window is discarded. For a large
+    multi-GB append-only dump where only a recent fraction of frames is
+    actually needed (e.g. average_tail's frac), this avoids reading,
+    decoding, and then re-slicing the *entire* file into memory -- which for
+    a several-GB file multiplies far past its on-disk size (full read +
+    decoded str + one substring copy per frame) and can exhaust available
+    RAM even when the caller only wanted the last 25% of frames.
+    """
     source = Path(path)
     # Take one finite snapshot rather than letting a concurrently appending
     # writer extend this read past the state we are about to validate.
     try:
         size = source.stat().st_size
         with source.open("rb") as stream:
-            text = stream.read(size).decode("utf-8")
+            if tail_bytes is not None and tail_bytes < size:
+                stream.seek(size - tail_bytes)
+                text = stream.read().decode("utf-8", errors="ignore")
+                first = re.search(r"(?m)^ITEM: TIMESTEP[ \t]*\r?$", text)
+                text = text[first.start():] if first else ""
+            else:
+                text = stream.read(size).decode("utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise FieldFormatError(f"cannot read {source}: {exc}") from exc
     starts = [match.start() for match in re.finditer(r"(?m)^ITEM: TIMESTEP[ \t]*\r?$", text)]

@@ -21,12 +21,16 @@ from field_io import FieldFormatError, read_complete_frames, recorded_dt, resolv
 NCOL = 11  # id xc yc xlo ylo xhi yhi nrho u v temp
 
 
-def read_frames(path, timestep=None, until_step=None, until_ms=None, dt=None):
+def read_frames(path, timestep=None, until_step=None, until_ms=None, dt=None, tail_bytes=None):
     """Return (steps, box, cells) with cells[k] = (Ncell, 11) sorted by id.
 
     Only complete, nonempty frames are eligible. Bounds include their endpoint.
+    tail_bytes, if given, limits the read to that many bytes from the end of
+    the file (see read_complete_frames) -- pass this only when the caller
+    doesn't need frames older than that window (e.g. a frac-based tail
+    average), since it makes earlier frames simply unavailable.
     """
-    result = read_complete_frames(path)
+    result = read_complete_frames(path, tail_bytes=tail_bytes)
     known_dt = resolved_dt(os.path.dirname(path), dt) if dt is not None else recorded_dt(os.path.dirname(path))
     if until_ms is not None:
         known_dt = resolved_dt(os.path.dirname(path), dt)
@@ -49,9 +53,30 @@ def read_frames(path, timestep=None, until_step=None, until_ms=None, dt=None):
     return [s for s, _ in keep], box, [fr for _, fr in keep]
 
 
-def average_tail(path, frac=0.5, timestep=None, until_step=None, until_ms=None, dt=None):
-    """Mean field over the last `frac` of the non-empty frames."""
-    steps, box, frames = read_frames(path, timestep, until_step, until_ms, dt)
+def average_tail(path, frac=0.5, timestep=None, until_step=None, until_ms=None, dt=None,
+                  fast_tail=False):
+    """Mean field over the last `frac` of the non-empty frames.
+
+    fast_tail=True (only valid with timestep/until_step/until_ms all None)
+    reads just a generous byte-sized tail slice of the file instead of the
+    whole thing -- for a several-GB append-only dump this avoids the full
+    read+decode+per-frame-slice memory multiplication that can exhaust RAM
+    even though only the last `frac` of frames is actually needed. The
+    resulting `trend` is then only computed over that partial window (see
+    trend_full=False in the returned dict), not the whole run.
+    """
+    tail_bytes = None
+    if fast_tail:
+        if timestep is not None or until_step is not None or until_ms is not None:
+            raise ValueError("fast_tail is only supported with plain frac selection")
+        try:
+            size = os.path.getsize(path)
+            # frames are ~uniform size, so byte-fraction ~ frame-count fraction;
+            # pad generously since we don't know frame count until parsed.
+            tail_bytes = max(int(size * min(1.0, frac * 1.5 + 0.05)), 8 * 1024 * 1024)
+        except OSError:
+            tail_bytes = None
+    steps, box, frames = read_frames(path, timestep, until_step, until_ms, dt, tail_bytes=tail_bytes)
     k = max(1, int(round(len(frames) * frac)))
     sel = frames[-k:]
     ids = sel[0][:, 0]
@@ -85,6 +110,7 @@ def average_tail(path, frac=0.5, timestep=None, until_step=None, until_ms=None, 
     w = d["yc"][m] * (d["xhi"][m] - d["xlo"][m]) * (d["yhi"][m] - d["ylo"][m])
     d["trend"] = [(s, float(np.sum(fr[m, 7] * w) / np.sum(w)))
                   for s, fr in zip(steps, frames)]
+    d["trend_full"] = tail_bytes is None
     return d
 
 

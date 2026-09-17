@@ -1,0 +1,94 @@
+# Takahashi et al. (2021) single-stage cell, axisymmetric helium at 4 K.
+# Geometry: 12.7 mm ID x 53 mm body, 4 mm ID x 20 mm inlet tube (full length,
+# not truncated), 5 mm aperture through a 0.5 mm plate. See gen_takahashi.py.
+# Pass MDOT (kg/s), FILLN (m^-3), FNUM, DT (s), and STEPS with -var.
+# CONVERGENCE-TEST VARIANT: identical physics/pre-fill to in.he_takahashi_mflow,
+# just sparser field.grid dump cadence (every 2000 steps instead of 1000) so a
+# much longer STEPS value (e.g. 3-4x normal) does not blow up dump file size.
+# Used to check whether bulk density / M / R at the aperture actually settle
+# to a steady value if given more time, given the same FILLN pre-fill start
+# (not vacuum) as the normal sweep deck.
+# 20 SCCM default (paper's Fig. 1 example); 100 ns timestep, 12 ms total.
+# Field dumps average non-overlapping 2 ms windows at that timestep; station
+# flux dumps average 0.1 ms windows.
+# SEED defaults below; WEIGHT=radius is the axisymmetric weighting mode.
+# Nested refinement uses 2:1 face transitions, checked by tools/check_grid_2d.py.
+# This deck uses 6 refinement levels: a coarse outer base covering a large
+# vacuum-space domain (for wide-angle jet backflow off the plate's back
+# face), stepping down through 2 bridging levels to the same fine mesh
+# (near cell/aperture) used in the original smaller-domain version. Every
+# level spans the full radial extent, so there are no internal radial
+# refinement boundaries -- only axial ones.
+
+variable    SEED index 8675309
+variable    WEIGHT index radius
+seed        ${SEED}
+units       si
+dimension   2
+boundary    o ao p
+global      gridcut 0.0
+create_box  -0.02 0.1544 0 0.06552 -0.5 0.5
+# Nested refinement bands: each level-N band sits inside a level-(N-1) band
+# that is at least four level-(N-1) cells wider on every open (axial) side.
+# L2 = 800 x 520 um : wide outer bridge
+region      L2 block -0.013 0.147 0.0 0.060 -1 1
+# L3 = 400 x 260 um : narrower bridge
+region      L3 block -0.009 0.10 0.0 0.03 -1 1
+# L4 = 200 x 130 um : near cell + a stretch of near-aperture plume (y-extent
+# taller than L5/L6's so there's a proper L4-only buffer band radially too)
+region      L4 block -0.0045 0.075 0.0 0.00815 -1 1
+# L5 = 100 x 65 um : tube/cell junction through the whole cell body
+region      L5 block -0.003 0.057 0.0 0.00715 -1 1
+# L6 = 50 x 32.5 um : plate/throat region (aperture station x 0.05325)
+region      L6 block 0.051 0.0555 0.0 0.00715 -1 1
+create_grid 109 63 1 levels 6 region 2 L2 2 2 1 region 3 L3 2 2 1 &
+            region 4 L4 2 2 1 region 5 L5 2 2 1 region 6 L6 2 2 1 inside any
+global      weight cell ${WEIGHT}
+global      mem/limit 1900
+balance_grid rcb cell
+species     he.species He
+mixture     hegas He nrho 1.0e22 temp 4.0
+mixture     fillgas He nrho ${FILLN} temp 4.0
+global      fnum ${FNUM}
+collide     vss hegas he.vss
+read_surf   cell_takahashi.surf type group cellwalls clip
+surf_collide walls diffuse 4.0 1.0
+surf_collide tp transparent
+surf_modify cellwalls collide walls
+group       cap surf type 2
+read_surf   tube_fwd.surf transparent group tf
+surf_modify tf collide tp
+read_surf   tube_rev.surf transparent group tr
+surf_modify tr collide tp
+read_surf   ap_fwd.surf transparent group af
+surf_modify af collide tp
+read_surf   ap_rev.surf transparent group ar
+surf_modify ar collide tp
+# Pre-fill the cell, stub and channel; the plume starts empty.
+region      gas block -0.0199 0.0535 0.0 0.00715 -1 1
+create_particles fillgas n 0 region gas
+balance_grid rcb part
+fix         bal balance 5000 1.1 rcb time
+global      particle/reorder 100
+fix         src emit/surf hegas cap normal yes mflow ${MDOT} 4.0
+compute     ctf surf tf hegas nflux norm flow
+fix         atf ave/surf tf 10 100 1000 c_ctf[1]
+dump        dtf surf tf 1000 tf.out id f_atf
+compute     ctr surf tr hegas nflux norm flow
+fix         atr ave/surf tr 10 100 1000 c_ctr[1]
+dump        dtr surf tr 1000 tr.out id f_atr
+compute     caf surf af hegas nflux norm flow
+fix         aaf ave/surf af 10 100 1000 c_caf[1]
+dump        daf surf af 1000 af.out id f_aaf
+compute     car surf ar hegas nflux norm flow
+fix         aar ave/surf ar 10 100 1000 c_car[1]
+dump        dar surf ar 1000 ar.out id f_aar
+compute     cg grid all hegas nrho u v
+compute     tg thermal/grid all hegas temp
+fix         ag ave/grid all 20 100 2000 c_cg[*] c_tg[*]
+dump        gd grid all 2000 field.grid id xc yc xlo ylo xhi yhi f_ag[*]
+stats       5000
+stats_style step cpu np nattempt ncoll f_src[1] f_src[2]
+stats_modify flush yes
+timestep    ${DT}
+run         ${STEPS}

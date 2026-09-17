@@ -10,9 +10,19 @@ sideways (angle in (90, 90+backscatter_deg]) so genuine backflow/
 backscatter is visible, while cells whose velocity points even further
 backward (usually stray, near-single-particle noise -- see the
 takahashi-case-and-axis-dip / long-run investigation) are hidden.
-Position-angle masking is NOT what this does -- a cell's position angle
-from the aperture can never exceed ~90 deg anyway (that space is solid
-plate), so masking by position can't isolate backscatter at all.
+
+This angle mask is only applied OUTSIDE the solid flow channel (tube bore
++ cell bore + aperture throat, using --rb/--rcell/--cell-length/--xexit/
+--rap, defaults matching gen_takahashi.py). Cells inside that channel are
+always shown unfiltered -- internal circulation there can legitimately
+point every which way and isn't "backscatter" in the free-jet-expansion
+sense this filter is meant to clean up. Gating on x-position alone (an
+earlier version of this script did that) is wrong: the wide domain used
+for backscatter viewing includes vacuum space OUTSIDE the cell wall at
+x <= xexit (added so wraparound backflow around the plate is visible),
+and gas sitting there IS real backscatter even though its x looks
+"upstream" -- gating by x alone left that whole region unfiltered no
+matter what --backscatter-deg was set to.
 
 Usage: python plot_fig1_style.py RUN_DIR --surf SURF --out OUT.png [--frac F]
 """
@@ -40,30 +50,49 @@ def main():
     p.add_argument("--backscatter-deg", type=float, default=20.0,
                    help="allow the local velocity vector to point up to this many degrees "
                         "PAST sideways (90deg) before a cell is masked out. Full forward "
-                        "(<=90deg) is always shown unrestricted. Negative disables masking.")
+                        "(<=90deg) is always shown unrestricted. Negative disables masking. "
+                        "Only applied downstream of --aperture-x.")
+    p.add_argument("--rb", type=float, default=0.002,
+                   help="inlet tube bore radius (m), x<0 region.")
+    p.add_argument("--rcell", type=float, default=0.00635,
+                   help="cell bore radius (m), 0<=x<=cell-length region.")
+    p.add_argument("--cell-length", type=float, default=0.053,
+                   help="cell body length (m) -- x of the plate's cell-side face.")
+    p.add_argument("--xexit", type=float, default=0.0535,
+                   help="x position of the aperture exit / plate's downstream face (m).")
+    p.add_argument("--rap", type=float, default=0.0025,
+                   help="aperture bore radius (m), cell-length<=x<=xexit region.")
     a = p.parse_args()
 
     try:
-        d = average_tail(os.path.join(a.run_dir, "field.grid"), a.frac)
+        d = average_tail(os.path.join(a.run_dir, "field.grid"), a.frac, fast_tail=True)
     except FieldFormatError as exc:
         raise SystemExit(str(exc)) from exc
     surf = surf_by_type(os.path.join(a.run_dir, a.surf))
     good, verts = verts_and_mirror(d)
+    ngood = int(np.sum(good))
 
     if a.backscatter_deg is not None and a.backscatter_deg >= 0:
         u = d["u"][good]
         v = d["v"][good]
+        xc = d["xc"][good]
+        yc = d["yc"][good]
         # angle of the local velocity vector from the forward (+x) axis;
         # 0 = straight forward, 90 = straight sideways, 180 = straight backward.
         vel_angle_deg = np.degrees(np.arctan2(np.abs(v), u))
-        within = vel_angle_deg <= (90.0 + a.backscatter_deg)
-        verts = [vv for vv, k in zip(verts, np.concatenate([within, within])) if k]
-        keep_mask = np.concatenate([within, within])
+        angle_ok = vel_angle_deg < (90.0 + a.backscatter_deg)
+        in_tube = (xc < 0) & (yc <= a.rb)
+        in_cell = (xc >= 0) & (xc <= a.cell_length) & (yc <= a.rcell)
+        in_throat = (xc > a.cell_length) & (xc <= a.xexit) & (yc <= a.rap)
+        inside_channel = in_tube | in_cell | in_throat
+        # only mask cells outside the solid flow channel; inside it, keep everything.
+        within = inside_channel | angle_ok
     else:
-        keep_mask = None
+        within = np.ones(ngood, dtype=bool)
 
-    mir = lambda arr: (np.concatenate([arr[good], arr[good]])[keep_mask]
-                        if keep_mask is not None else np.concatenate([arr[good], arr[good]]))
+    verts = [vv for vv, k in zip(verts, np.concatenate([within, within])) if k]
+    keep_mask = np.concatenate([within, within])
+    vals = lambda arr: np.concatenate([arr[good], arr[good]])[keep_mask]
 
     box = d["box"]
     x_span = box[0][1] - box[0][0]
@@ -71,7 +100,7 @@ def main():
     height = 6.5
     width = max(6.0, height * x_span / r_span + 2.0)  # +2" for colorbar/labels
     fig, ax = plt.subplots(figsize=(width, height))
-    panel(ax, fig, verts, mir(d["u"]),
+    panel(ax, fig, verts, vals(d["u"]),
           r"Velocity component in the x direction (m s$^{-1}$)",
           "jet", surf, box, clim=(a.vmin, a.vmax))
     ax.set_xlabel("x (m)")

@@ -1,0 +1,4 @@
+# Helium-4, SI units. Columns: ID molwt mass rotdof invrotrelax
+# vibdof invvibrelax vibtemp specwt charge.
+
+He  4.002603  6.6464791e-27  0  0.0  0  0.0  0.0  1.0  0.0

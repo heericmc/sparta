@@ -1,0 +1,23 @@
+# Minimal smoke test: does the revolved 3D surface read in cleanly
+# (watertight, correct normal orientation) before committing to a real run?
+seed        8675309
+units       si
+dimension   3
+boundary    o o o
+global      gridcut 0.0
+create_box  -0.02 0.1544 -0.06552 0.06552 -0.06552 0.06552
+create_grid 109 126 126
+balance_grid rcb cell
+species     he.species He
+mixture     hegas He nrho 1.0e22 temp 4.0
+global      fnum 5.0e10
+collide     vss hegas he.vss
+read_surf   cell_takahashi_3d.surf type group cellwalls clip
+surf_collide walls diffuse 4.0 1.0
+surf_modify cellwalls collide walls
+group       cap surf type 2
+region      gas block -0.0199 0.0535 -0.00715 0.00715 -0.00715 0.00715
+create_particles hegas n 5000 region gas
+stats       1
+stats_style step cpu np nattempt ncoll
+run         0
