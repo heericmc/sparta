@@ -1,0 +1,27 @@
+# Minimal smoke test: does cell_fluor3d.surf read in cleanly (watertight,
+# correct outward normals) before committing to a real run? Mirrors
+# cases/takahashi-3d/in.smoketest_3d. `run 0` only -- no physics tuning here.
+# 23K neon buffer gas (see ne.species/ne.vss).
+seed        8675309
+units       si
+dimension   3
+boundary    o o o
+global      gridcut 0.0
+create_box  0.015 0.100 -0.010 0.055 -0.015 0.050
+create_grid 40 30 30
+balance_grid rcb cell
+species     ne.species Ne
+mixture     negas Ne nrho 1.0e22 temp 23.0
+global      fnum 5.0e10
+collide     vss negas ne.vss
+read_surf   cell_fluor3d.surf type group cellwalls clip
+surf_collide walls diffuse 23.0 1.0
+surf_modify cellwalls collide walls
+group       gasinlet surf type 2
+group       moleculein surf type 3
+group       moleculeout surf type 4
+region      gas block 0.031 0.082 0.001 0.043 -0.005 0.039
+create_particles negas n 5000 region gas
+stats       1
+stats_style step cpu np nattempt ncoll
+run         0

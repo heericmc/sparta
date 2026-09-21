@@ -1,0 +1,6 @@
+# VHS neon: species-ID diameter(m) omega tref(K) alpha.
+# Bird, "Molecular Gas Dynamics and the Direct Simulation of Gas Flows"
+# (1994), Table A1 -- standard DSMC reference values (temperature-dependent
+# viscosity, unlike he.species/he.vss's simplified hard-sphere He model).
+
+Ne  2.79e-10  0.66  273.15  1.0
