@@ -174,6 +174,38 @@ def keep_largest_shell(shape):
     bb.Add(new_solid, outer)
     return new_solid
 
+def keep_shells_min_faces(shape, min_faces):
+    """Like keep_largest_shell, but keeps every shell with at least
+    min_faces faces (not just the single largest) -- used after the final
+    7-part fuse, where more than one surviving shell can be legitimate
+    (e.g. the optical window and its retaining frame, which don't share
+    coincident geometry with the main body and so correctly remain their
+    own separate shells rather than merging into it)."""
+    shells = []
+    e = TopExp_Explorer(shape, TopAbs_SHELL)
+    while e.More():
+        shells.append(TopoDS.Shell_s(e.Current()))
+        e.Next()
+
+    def face_count(shell):
+        n = 0
+        fe = TopExp_Explorer(shell, TopAbs_FACE)
+        while fe.More():
+            n += 1
+            fe.Next()
+        return n
+
+    kept = [s for s in shells if face_count(s) >= min_faces]
+    dropped = len(shells) - len(kept)
+    if dropped:
+        print(f"  (dropped {dropped} shell(s) with < {min_faces} faces -- residual fuse artifacts)")
+    comp = TopoDS_Compound()
+    bb = BRep_Builder()
+    bb.MakeCompound(comp)
+    for s in kept:
+        bb.Add(comp, s)
+    return comp
+
 def make_plug(radius, start_pnt, direction, height):
     ax2 = gp_Ax2(start_pnt, direction)
     maker = BRepPrimAPI_MakeCylinder(ax2, radius, height)
@@ -332,12 +364,37 @@ def main():
 
         plugged_solids.append(new_shape)
 
-    all_tris = []
-    for si, shape in enumerate(plugged_solids):
-        tris = triangulate_solid(shape)
-        all_tris.extend(tris)
-        print(f"  solid #{si}: {len(tris)} triangles")
+    # Fuse into ONE true watertight body instead of triangulating each of
+    # the 7 CAD parts independently and concatenating. The independent-
+    # triangulation approach (used until now) is watertight by our own
+    # per-solid free-edge check, since each part is internally consistent
+    # -- but at every mating boundary between touching parts (housing to
+    # each bolted-on plate/cover/inlet block) it leaves TWO separate,
+    # oppositely-facing surface patches covering the same physical area: a
+    # real double-wall duplicate, invisible to a check that only looks
+    # within one solid at a time. That is almost certainly what SPARTA's
+    # own read_surf watertight check has been rejecting all along -- the
+    # "32 duplicate edges" count stayed IDENTICAL even after the screw-hole
+    # void fix above changed solid #0's triangle count by 8x, which rules
+    # out the screw holes as the real cause and points at the (until now
+    # untouched) mating boundaries instead.
+    #
+    # Not every part actually touches: the optical window and its
+    # retaining frame sit with a genuine small CAD gap/overlap versus the
+    # main housing (not flush-mating), so they legitimately remain their
+    # own separate shells after the fuse -- that's correct, not a defect,
+    # since they don't actually share coincident geometry with anything.
+    base = plugged_solids[0]
+    tool = make_compound(plugged_solids[1:])
+    fuse = BRepAlgoAPI_Fuse(base, tool)
+    fuse.SetFuzzyValue(FUSE_TOL)
+    fuse.Build()
+    if not fuse.IsDone():
+        raise RuntimeError("Final assembly fuse failed")
+    merged = keep_shells_min_faces(fuse.Shape(), min_faces=3)
+    print("Fused all 7 parts into one assembly (plus any genuinely separate shells, e.g. the window).")
 
+    all_tris = triangulate_solid(merged)
     print(f"Total triangles before filtering: {len(all_tris)}")
 
     # Classify. Do NOT drop small-area triangles here -- some (e.g. at the
