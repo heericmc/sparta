@@ -33,9 +33,9 @@ import sys
 import cadquery as cq
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.GeomAbs import GeomAbs_Cylinder
-from OCP.TopAbs import TopAbs_FACE, TopAbs_FORWARD
+from OCP.TopAbs import TopAbs_FACE, TopAbs_FORWARD, TopAbs_SHELL
 from OCP.TopExp import TopExp_Explorer
-from OCP.TopoDS import TopoDS, TopoDS_Compound
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Solid
 from OCP.BRepTools import BRepTools
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
 from OCP.gp import gp_Ax2, gp_Pnt, gp_Dir
@@ -107,6 +107,18 @@ def axis_key(start, end):
     return (idx, sign, perp)
 
 def group_screw_holes(faces):
+    """Build one plug per physical hole, sized exactly to each face group's
+    own cylindrical extent (no attempt to reach any adjacent drill-tip
+    cone). This intentionally leaves a small enclosed void at each blind
+    hole's conical tip -- see keep_largest_shell() below for how those are
+    removed afterward. (Two earlier approaches tried to eliminate the voids
+    at the boolean stage instead -- extending each plug to the cone's exact
+    apex, or by a flat margin -- but both introduced new, worse artifacts:
+    a flat margin risked reaching into unrelated void space like the main
+    chamber bore, and even the precise apex-based extension left duplicate/
+    non-manifold geometry at the hole's OPENING end as a non-local side
+    effect of the more complex simultaneous 32-hole boolean fuse. Stripping
+    the resulting shells after a plain fuse is far more robust.)"""
     groups = {}
     for radius, start, end in faces:
         key = axis_key(start, end)
@@ -127,6 +139,40 @@ def group_screw_holes(faces):
         start_pnt = gp_Pnt(origin.X()+d.X()*tmin, origin.Y()+d.Y()*tmin, origin.Z()+d.Z()*tmin)
         plugs.append((max_radius, start_pnt, d, tmax - tmin))
     return plugs
+
+def keep_largest_shell(shape):
+    """Discard every shell but the largest (by face count), rebuilt as a
+    fresh solid. A plain (unextended) plug fuse leaves each blind screw
+    hole's drill-tip cone as its own small, fully enclosed 2-face void
+    shell alongside the one real outer shell -- these are individually
+    valid B-Rep (BRepCheck-clean) and invisible to a ray-casting classifier,
+    but SPARTA's own read_surf watertight check rejects a surf file over
+    them regardless ("duplicate edges", one per such void). Since they are
+    genuinely enclosed and touch nothing else, just dropping them from the
+    solid removes the corresponding tiny closed patch of triangles from the
+    final mesh with no effect on the real boundary."""
+    shells = []
+    e = TopExp_Explorer(shape, TopAbs_SHELL)
+    while e.More():
+        shells.append(TopoDS.Shell_s(e.Current()))
+        e.Next()
+    if len(shells) <= 1:
+        return shape
+
+    def face_count(shell):
+        n = 0
+        fe = TopExp_Explorer(shell, TopAbs_FACE)
+        while fe.More():
+            n += 1
+            fe.Next()
+        return n
+
+    outer = max(shells, key=face_count)
+    new_solid = TopoDS_Solid()
+    bb = BRep_Builder()
+    bb.MakeSolid(new_solid)
+    bb.Add(new_solid, outer)
+    return new_solid
 
 def make_plug(radius, start_pnt, direction, height):
     ax2 = gp_Ax2(start_pnt, direction)
@@ -273,6 +319,7 @@ def main():
         # skip clean() specifically for solid #6.
         do_clean = si != GAS_INLET_SOLID_IDX
         new_shape = fuse_shapes(shape, plugs, do_clean=do_clean)
+        new_shape = keep_largest_shell(new_shape)
         print(f"  solid #{si}: {len(plugs)} hole(s) plugged")
 
         if si == GAS_INLET_SOLID_IDX:
@@ -280,6 +327,7 @@ def main():
             cap_dir = gp_Dir(*GAS_INLET_DIR)
             cap_plug = make_plug(GAS_INLET_RADIUS_MM, cap_start, cap_dir, GAS_INLET_CAP_DEPTH_MM)
             new_shape = fuse_shapes(new_shape, [cap_plug], do_clean=False)
+            new_shape = keep_largest_shell(new_shape)
             print(f"    + gas inlet cap plugged")
 
         plugged_solids.append(new_shape)
