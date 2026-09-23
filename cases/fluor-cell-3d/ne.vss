@@ -2,5 +2,9 @@
 # Bird, "Molecular Gas Dynamics and the Direct Simulation of Gas Flows"
 # (1994), Table A1 -- standard DSMC reference values (temperature-dependent
 # viscosity, unlike he.species/he.vss's simplified hard-sphere He model).
+# Diameter re-derived from Table A1's own mass/viscosity/omega via
+# mu_ref = 15*sqrt(pi*m*kB*Tref) / (2*pi*d^2*(5-2*omega)*(7-2*omega));
+# corrects a prior transcription (2.79e-10) -- see
+# docs/fluor-cell-3d-code-review-findings.md.
 
-Ne  2.79e-10  0.66  273.15  1.0
+Ne  2.766e-10  0.66  273.15  1.0

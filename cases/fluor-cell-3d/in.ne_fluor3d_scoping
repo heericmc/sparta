@@ -53,6 +53,7 @@ units       si
 dimension   3
 boundary    o o o
 global      gridcut 0.0
+global      surfmax 2000
 create_box  0.005 0.200 -0.020 0.070 -0.030 0.080
 create_grid 60 27 33
 balance_grid rcb cell

@@ -484,9 +484,12 @@ end
 """
     segment_hits_triangle(x1, x2, v0, v1, v2)
 
-True if the line SEGMENT from x1 to x2 crosses the triangle (v0,v1,v2).
-Standard Moller-Trumbore ray-triangle test, with t (the intersection's
-fractional position along x1->x2) restricted to [0,1] to make it a
+(hit, t): whether the line SEGMENT from x1 to x2 crosses the triangle
+(v0,v1,v2), and if so, t (the intersection's fractional position along
+x1->x2, in [0,1]) -- the caller needs t to clip the reported position to
+the actual crossing point, not the segment's (possibly far-overshooting,
+see freePath's up-to-1000m sampled step) raw endpoint x2. Standard
+Moller-Trumbore ray-triangle test, t restricted to [0,1] to make it a
 segment test rather than an infinite-ray test.
 """
 @inline function segment_hits_triangle(x1, x2, v0, v1, v2)
@@ -497,21 +500,21 @@ segment test rather than an infinite-ray test.
     h = cross3(dir, edge2)
     a = dot3(edge1, h)
     if abs(a) < EPS
-        return false
+        return (false, 0.0)
     end
     f = 1.0 / a
     s = sub3(x1, v0)
     u = f * dot3(s, h)
     if u < 0.0 || u > 1.0
-        return false
+        return (false, 0.0)
     end
     q = cross3(s, edge1)
     v = f * dot3(dir, q)
     if v < 0.0 || u + v > 1.0
-        return false
+        return (false, 0.0)
     end
     t = f * dot3(edge2, q)
-    return 0.0 <= t <= 1.0
+    return (0.0 <= t <= 1.0, t)
 end
 
 # ---- Spatial acceleration for getCollision(): a real production geometry
@@ -700,11 +703,22 @@ function build_field(geomFile, gridFile)
         getCollision(x1, x2)
 
     True 3D segment-vs-triangle-mesh test, using the spatial grid to test
-    only nearby triangles rather than the whole mesh. Returns 0 (no
-    collision), 1 (hit the wall mesh), or 2 (left the simulation box
-    bounds -- read from the grid dump's own cell extents, not hardcoded,
-    so this always matches whatever create_box the SPARTA deck actually
-    used). Allocates a small fresh candidate list per call rather than a
+    only nearby triangles rather than the whole mesh. Returns (code, t):
+    (0, 1.0) no collision, (1, t) hit the wall mesh, or (2, t) left the
+    simulation box bounds (read from the grid dump's own cell extents, not
+    hardcoded, so this always matches whatever create_box the SPARTA deck
+    actually used) -- t is the crossing point's fraction along x1->x2, so
+    the caller can clip its reported position to the ACTUAL crossing point
+    rather than x2 itself. x2 can be far beyond either the mesh or the box
+    (freePath's sampled step is capped at 1000m, vastly larger than this
+    ~0.2m domain, whenever local density is low), so reporting x2 as-is
+    for a hit/exit produces nonsensical multi-meter-to-hundreds-of-meter
+    "exit positions" -- confirmed on this case's real geometry (not caught
+    by the synthetic-cube smoke testing this file shipped with): about
+    half of a 20-particle test batch landed 1-289m from a 0.2m box before
+    this fix. When multiple triangles are crossed by one step, the
+    smallest t (the FIRST crossing along the segment) is the physical one.
+    Allocates a small fresh candidate list per call rather than a
     thread-indexed scratch buffer -- Threads.threadid() is not guaranteed
     to stay within 1:Threads.nthreads() on every Julia version (newer
     versions have a separate "interactive" thread pool that threadid()
@@ -714,16 +728,30 @@ function build_field(geomFile, gridFile)
     matters more than avoiding one small per-call allocation.
     """
     @inline function getCollision(x1, x2)
+        best_t = Inf
         for ti in candidate_triangles(tri_grid, x1, x2)
             p1, p2, p3 = triangles[ti]
-            if segment_hits_triangle(x1, x2, points[p1], points[p2], points[p3])
-                return 1
+            hit, t = segment_hits_triangle(x1, x2, points[p1], points[p2], points[p3])
+            if hit && t < best_t
+                best_t = t
+            end
+        end
+        if best_t <= 1.0
+            return (1, best_t)
+        end
+        d = sub3(x2, x1)
+        t_box = 1.0
+        for (axis, lo, hi) in ((1, xlo, xhi), (2, ylo, yhi), (3, zlo, zhi))
+            if d[axis] > 0.0
+                t_box = min(t_box, (hi - x1[axis]) / d[axis])
+            elseif d[axis] < 0.0
+                t_box = min(t_box, (lo - x1[axis]) / d[axis])
             end
         end
         if x2[1] < xlo || x2[1] > xhi || x2[2] < ylo || x2[2] > yhi || x2[3] < zlo || x2[3] > zhi
-            return 2
+            return (2, clamp(t_box, 0.0, 1.0))
         end
-        return 0
+        return (0, 1.0)
     end
 
     return (; interpolate!, getCollision, table, max_x_geom)
@@ -763,7 +791,21 @@ version.
         else
             freePropagate!(xnext, x, v, dist/vmag)
         end
-        if getCollision(x, xnext) != 0
+        coll_code, coll_t = getCollision(x, xnext)
+        if coll_code != 0
+            # Clip to the actual crossing point (coll_t fraction along
+            # x->xnext), not the raw sampled endpoint -- see getCollision's
+            # docstring for why xnext itself can be far outside the domain.
+            # Nudged a hair past the exact crossing (1e-9 relative to this
+            # ~0.2m domain is sub-angstrom, physically negligible) so the
+            # caller's own re-classification call on this output position
+            # (line ~824, for --saveexitstats) reliably re-detects it as
+            # outside/on the mesh rather than landing exactly ON a boundary
+            # it came from, where a plain >/< comparison can go either way.
+            t_clip = min(1.0, coll_t + 1e-9)
+            xnext[1] = x[1] + t_clip * (xnext[1] - x[1])
+            xnext[2] = x[2] + t_clip * (xnext[2] - x[2])
+            xnext[3] = x[3] + t_clip * (xnext[3] - x[3])
             return (x[1], x[2], x[3], xnext[1], xnext[2], xnext[3], v[1], v[2], v[3], collides, time)
         else
             time += dist / max(vmag, 1e-30)
@@ -813,7 +855,7 @@ function SimulateParticles(
     new_stats = isnothing(make_stats) ?
         (() -> StatsArray(0.0, maxr, rbins, minz, maxz, zbins)) : make_stats
 
-    output_dim = length(propagate(zeros(3), zeros(3), interpolate!, (x,y)->true, table))
+    output_dim = length(propagate(zeros(3), zeros(3), interpolate!, (x,y)->(1,1.0), table))
     outputs = zeros(nParticles, output_dim)
 
     if !isnothing(savestats)
@@ -838,7 +880,7 @@ function SimulateParticles(
             xpart, vpart = generateParticle()
             if SPAWNCLIP != 0
                 tries = 0
-                while getCollision(SPAWN_REF, xpart) != 0
+                while getCollision(SPAWN_REF, xpart)[1] != 0
                     tries += 1
                     tries > 1000 && error("--spawnclip: 1000 consecutive spawn candidates were cut off from the spawn reference $(SPAWN_REF) by geometry; check -x/-y/-z and the .surf file")
                     xpart, vpart = generateParticle()
@@ -847,7 +889,7 @@ function SimulateParticles(
             end
             isnothing(spawns) || (spawns[i,:] .= xpart)
             outputs[i,:] .= propagate(xpart, vpart, interpolate!, getCollision, table, stats, i)
-            colltype = getCollision(outputs[i,[1,2,3]], outputs[i,[4,5,6]])
+            colltype, _ = getCollision(outputs[i,[1,2,3]], outputs[i,[4,5,6]])
             if !isnothing(savestats)
                 merge!(part_all[c], stats)
             end
