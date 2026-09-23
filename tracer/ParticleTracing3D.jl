@@ -193,9 +193,21 @@ function parse_commandline()
             arg_type = Float64
             default = 156.325
         "--sigma"
-            help = "collision cross section between buffer gas and particle (m^2)"
+            help = "constant collision cross section (m^2), used only when --sigma-energy-dependent is 0"
             arg_type = Float64
-            default = 5.0e-19
+            default = 2.0e-18
+        "--sigma-energy-dependent"
+            help = "if nonzero (default), scale the cross section with collision speed instead of holding it constant: sigma-low near/below the local thermal speed (where the literature-anchored value is actually valid), falling off as 1/v (Langevin capture scaling) down to a sigma-high floor at high relative speed (repulsive-core regime, e.g. early in a hot ion's trajectory). Set to 0 to fall back to the old constant --sigma behavior."
+            arg_type = Int
+            default = 1
+        "--sigma-low"
+            help = "cross section (m^2) at/below the local buffer-gas thermal speed, in energy-dependent mode"
+            arg_type = Float64
+            default = 2.0e-18
+        "--sigma-high"
+            help = "cross section (m^2) floor at high relative speed, in energy-dependent mode"
+            arg_type = Float64
+            default = 1.5e-19
         "--saveall"
             help = "saves all particles if nonzero or just those that leave the cell if zero"
             arg_type = Int
@@ -247,6 +259,9 @@ const MASS_BUFFER_GAS = args["m"]
 const MASS_REDUCED = MASS_PARTICLE * MASS_BUFFER_GAS / (MASS_PARTICLE + MASS_BUFFER_GAS)
 const kB = 8314.46
 const σ_BUFFER_GAS_PARTICLE = args["sigma"]
+const SIGMA_ENERGY_DEPENDENT = args["sigma-energy-dependent"] != 0
+const SIGMA_LOW = args["sigma-low"]
+const SIGMA_HIGH_FLOOR = args["sigma-high"]
 const TRAJPRINT = args["trajprint"]
 TRAJPRINT > 100 && @printf(stderr,
     "WARNING: --trajprint %d records all collision legs and can produce large output.\n", TRAJPRINT)
@@ -403,8 +418,54 @@ end
     xnext[3] = x[3] + v[3]*t
 end
 
+"""
+    sigma_of_speed(vcoll, T)
+
+Energy-dependent cross section: SIGMA_LOW at/below the local buffer-gas
+thermal speed (sqrt(8kT/(pi*m_gas)), the same quantity already used
+below for the mean relative speed -- this is exactly the regime the
+literature-anchored SIGMA_LOW value is valid for), falling off as
+1/vcoll above that (Langevin capture theory: for a polarization-
+dominated ion-neutral potential, the capture cross section scales
+exactly as 1/v, which is why the classic Langevin RATE CONSTANT,
+sigma*v, is velocity-independent), floored at SIGMA_HIGH_FLOOR for high
+collision speed (repulsive-core regime, e.g. early in a 500eV ion's
+trajectory, where a near-thermal measurement's cross section value is
+no longer applicable).
+
+SIGMA_LOW=2.0e-18 m^2 is scaled from a REAL DIRECT MEASUREMENT: buffer-
+gas-cooled BaF + He collision cross sections of 1.4e-18 and 2.7e-18 m^2
+(two independent papers, Phys. Rev. A 95, 032701 (2017) and arXiv
+1906.08798), scaled He->Ne by polarizability. Two caveats on that
+number: it's for neutral BaF, not the BaF+ ion this tracer actually
+simulates (ion-induced-dipole attraction should make the true ionic
+cross section equal or larger, so this is more a lower bound than a
+central estimate), and it's still a near-thermal value being used as
+the LOW-speed anchor only, not applicable on its own across the whole
+500eV-to-thermal range. SIGMA_HIGH_FLOOR=1.5e-19 m^2 remains a physical-
+reasoning estimate (ionic radius sum) with no direct high-energy
+literature backing found for this or a closely analogous system -- one
+loose plausibility signal from general ion-atom scattering literature
+(not confirmed specific to this system) suggests real cross sections may
+fall off more gradually with energy than the 1/v form here assumes,
+which would mean the true high-energy cross section is reached more
+gradually and stays higher across more of the trajectory than this
+model predicts. See docs/hpc-fluor-cell-3d-molecules-handoff.md for the
+full reasoning and sourcing, and for running the old constant-sigma
+bracket alongside this for comparison.
+"""
+@inline function sigma_of_speed(vcoll, T)
+    vref = sqrt(8*kB*T/(MASS_BUFFER_GAS*pi))
+    if vcoll <= vref || vref <= 0.0
+        return SIGMA_LOW
+    end
+    return max(SIGMA_LOW * vref / vcoll, SIGMA_HIGH_FLOOR)
+end
+
 @inline function freePath(v, vrel, T, ρ)
-    λ = sqrt(v[1]^2 + v[2]^2 + v[3]^2)/(ρ*σ_BUFFER_GAS_PARTICLE*sqrt(8*kB*T/(MASS_BUFFER_GAS*pi) + vrel^2))
+    vcoll = sqrt(8*kB*T/(MASS_BUFFER_GAS*pi) + vrel^2)
+    σ = SIGMA_ENERGY_DEPENDENT ? sigma_of_speed(vcoll, T) : σ_BUFFER_GAS_PARTICLE
+    λ = sqrt(v[1]^2 + v[2]^2 + v[3]^2)/(ρ*σ*vcoll)
     return min(-log(Random.rand()) * λ, 1000.0)
 end
 

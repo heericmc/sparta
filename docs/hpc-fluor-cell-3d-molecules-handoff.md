@@ -70,9 +70,13 @@ julia --project=../../tracer --threads=4 ../../tracer/ParticleTracing3D.jl \
   cell_fluor3d.surf frozen_field.grid \
   -n 20 -x 0.03048 -y 0.01905 -z 0.01905 \
   --vx 24843.71 --vy 0 --vz 0 \
-  -m 20.1797 -M 156.325 --sigma 5.0e-19 \
+  -m 20.1797 -M 156.325 \
   --saveall 1 --seed 1
 ```
+
+(`--sigma-energy-dependent` defaults to on, using `--sigma-low`/`--sigma-high`
+-- see section 3. No need to pass `--sigma` unless you deliberately want
+the old constant-cross-section mode for comparison.)
 
 Check before anything else:
 - It runs without erroring. If it crashes on a range/bounds error, that's
@@ -95,23 +99,64 @@ Check before anything else:
 | `-m` (buffer gas mass) | `20.1797` amu | Neon, matches `ne.species` |
 | `--vx` | `24843.71` m/s | v = sqrt(2 * 500eV / m_BaF+); recompute if the injection energy changes |
 | `-x -y -z` | `0.03048 0.01905 0.01905` | Molecule-inlet port location (2.54mm channel, axial) |
-| `--sigma` | `5.0e-19` down to `1.5e-19` m^2 | See below -- run as a scan, not one number |
+| `--sigma-low` | `2.0e-18` m^2 (default) | Cross section at/below the local buffer-gas thermal speed -- see below |
+| `--sigma-high` | `1.5e-19` m^2 (default) | Cross section floor at high relative speed -- see below |
 | `-T` | `0.0` (default) | Perfectly monoenergetic, mono-directional beam. **This is a simplification, not a measurement** -- if the real source has known energy/angular spread, set a nonzero `-T` (adds a thermal-style spread around the mean velocity) or check whether that spread matters for your conclusion before assuming it doesn't. |
 
-**Cross section**: no direct Ba+/BaF+/Ne data exists in the literature
-search done for this (see project discussion). Anchored to measured
-Ba+ mobility in He and Ar (Dressler et al., *J. Chem. Phys.* 89, 4707
-(1988) and 93, 5118 (1990)), converted to a momentum-transfer cross
-section and interpolated to Ne by polarizability scaling: central
-estimate ~5e-19 m^2. That's a near-thermal (zero-field mobility) value;
-at 500 eV the ion is in the repulsive-core regime where the true cross
-section is expected to be smaller by a factor of a few, becoming accurate
-again once the ion has mostly thermalized. Run the actual transmission/
-flow-rate result at at least `--sigma 5.0e-19` and `--sigma 1.5e-19` and
-report both -- if the conclusion (e.g. "flow rate X is best") doesn't
-change between them, the uncertainty here doesn't matter for the decision
-being made; if it does change, that's important to know before trusting
-either number alone.
+**Cross section -- revised, read this if you ran the transmission
+numbers from an earlier version of this doc.** The first version used a
+single constant `--sigma`, scanned between two disconnected guesses
+(5.0e-19 and 1.5e-19 m^2), and found the transmission fraction changed a
+lot between them (72% vs. 89%) -- a real, unresolved uncertainty at the
+time. Two things changed since:
+
+1. The tracer now supports (and defaults to) an **energy-dependent cross
+   section** (`--sigma-energy-dependent`, on by default) instead of a
+   single constant: `sigma-low` at/below the local buffer-gas thermal
+   speed, falling off as 1/v (Langevin capture scaling -- the standard
+   result that the capture cross section for a polarization-dominated
+   ion-neutral potential scales as 1/v, so the *rate constant* sigma*v is
+   velocity-independent) down to a `sigma-high` floor at high relative
+   speed. This reuses the same two numbers as before as physically
+   connected endpoints of one energy-dependent curve, not an arbitrary
+   bracket -- see `sigma_of_speed()`'s docstring in the source for the
+   full derivation. The old constant-sigma mode still exists
+   (`--sigma-energy-dependent 0 --sigma <value>`) for direct comparison
+   if you want it.
+2. **`sigma-low` was revised up, from 5.0e-19 to 2.0e-18 m^2** (4x), based
+   on real measured data found in a follow-up literature search: two
+   independent buffer-gas-cooling papers directly measured the BaF
+   (neutral) + He collision cross section --
+   1.4e-18 m^2 (*Phys. Rev. A* 95, 032701 (2017)) and 2.7e-18 m^2 (arXiv
+   1906.08798) -- in good agreement with each other. The earlier 5.0e-19
+   value was an indirect extrapolation (Ba+ ion mobility in He/Ar, not
+   BaF, converted through a mobility formula and then polarizability-
+   scaled to Ne); this new value is scaled from a direct measurement of
+   the actual molecule, just in He instead of Ne, so only one scaling
+   step (polarizability, He->Ne) instead of two. It's still for the
+   neutral molecule, not the BaF+ ion actually being traced -- ion-
+   induced-dipole attraction should make the true ionic value equal or
+   larger, so treat 2.0e-18 as more a lower bound than a central estimate.
+
+`sigma-high` (1.5e-19 m^2) is UNCHANGED and still just a physical-
+reasoning estimate (summed ionic/atomic radii) -- no high-energy (eV-keV
+range) literature data for this or a closely analogous ion-neutral system
+was found in either literature search. One loose signal from general
+ion-atom scattering literature (a shallower E^(-1/3) power law reported
+for elastic-scattering amplitude in some systems, not confirmed to apply
+to this one) hints the true high-energy cross section may fall off more
+gradually than this model's 1/v form assumes -- i.e. sigma-high may be
+reached more gradually and stay higher across more of the trajectory than
+predicted. Not a number to plug in, just a reason not to over-trust the
+high-energy end of this model either.
+
+**Given both ends are still uncertain, run and report at least three
+conditions**, not one: the default energy-dependent model, and the old
+constant-sigma pair (`--sigma-energy-dependent 0 --sigma 2.0e-18` and
+`--sigma-energy-dependent 0 --sigma 1.5e-19`) as bounding comparisons. If
+the flow-rate conclusion is the same across all three, the remaining
+cross-section uncertainty doesn't block the decision; if it isn't, that's
+important to know before trusting any single number.
 
 **What "success" and "loss" mean in the output** (columns: `idx x y z
 xnext ynext znext vx vy vz collides time`; `xnext,ynext,znext` is where
@@ -160,7 +205,9 @@ does, per the scoping deck's placeholder `create_box`).
    reproduce at a FIXED thread count, not across different `--threads`
    values). If you can't reproduce a run with its own recorded seed, don't
    trust its output.
-5. Run the `--sigma` sensitivity pair from section 3 and report both.
+5. Run all three cross-section conditions from section 3 (energy-
+   dependent default, and both constant-sigma bounds) and report all
+   three, not just the default.
 
 ## 5. What this deliberately does NOT model
 
@@ -201,8 +248,8 @@ producing numbers:
 - Whether the smoke test (section 2) and a real statistics-quality run
   (larger `-n`, at least a few hundred particles per condition) completed
   cleanly.
-- Transmission / lost-to-inlet / stuck-on-wall fractions, at both
-  `--sigma` values from section 3, for whatever flow rate(s) the
+- Transmission / lost-to-inlet / stuck-on-wall fractions, at all three
+  cross-section conditions from section 3, for whatever flow rate(s) the
   completed neon run(s) used.
 - Results of the validation checklist in section 4 -- not just "it ran,"
   but whether the numbers hold together physically.
