@@ -1,0 +1,46 @@
+# Resume for in.ne_fluor3d_sealed_run (10 x 5000 averaging window, DUMPFREQ 50000).
+#
+# Resume in.ne_fluor3d_run from a SPARTA restart file after a job was killed
+# (walltime limit, node failure) before finishing. Mirrors
+# cases/takahashi-3d/in.he_takahashi_3d_resume.
+# Pass RESTARTFILE (e.g. restart.chunk3), MDOT, FILLN, FNUM, DT, DUMPFREQ,
+# CHECKPOINT_STEPS, and NCHUNKS (remaining chunks to run) with -var.
+# field.grid/moleculein.out/moleculeout.out are appended to, not overwritten.
+
+seed        8675309
+read_restart ${RESTARTFILE}
+balance_grid rcb cell
+global      mem/limit 1900
+mixture     negas Ne nrho 1.0e22 temp 23.0
+mixture     fillgas Ne nrho ${FILLN} temp 23.0
+global      fnum ${FNUM}
+collide     vss negas ne.vss
+surf_collide walls diffuse 23.0 1.0
+surf_modify cellwalls collide walls
+fix         bal balance 5000 1.1 rcb time
+global      particle/reorder 100
+fix         src emit/surf negas gasinlet normal yes mflow ${MDOT} 23.0
+compute     cmi surf moleculein negas nflux norm flow
+fix         ami ave/surf moleculein 10 100 1000 c_cmi[1]
+dump        dmi surf moleculein 1000 moleculein.out id f_ami
+dump_modify dmi append yes
+compute     cmo surf moleculeout negas nflux norm flow
+fix         amo ave/surf moleculeout 10 100 1000 c_cmo[1]
+dump        dmo surf moleculeout 1000 moleculeout.out id f_amo
+dump_modify dmo append yes
+compute     cg grid all negas nrho u v w
+compute     tg thermal/grid all negas temp
+fix         ag ave/grid all 10 5000 ${DUMPFREQ} c_cg[*] c_tg[*]
+dump        gd grid all ${DUMPFREQ} field.grid id xc yc zc xlo ylo zlo xhi yhi zhi f_ag[*]
+dump_modify gd append yes
+stats       5000
+stats_style step cpu np nattempt ncoll f_src[1] f_src[2]
+stats_modify flush yes
+timestep    ${DT}
+
+variable    loop_i loop ${NCHUNKS}
+label       loop
+run         ${CHECKPOINT_STEPS}
+write_restart restart.%.*
+next        loop_i
+jump        SELF loop

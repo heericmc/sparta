@@ -1,0 +1,32 @@
+# Resume in.he_takahashi_3d_run from a SPARTA restart file after a job was
+# killed (walltime limit, node failure, preemption) before finishing.
+# Pass RESTARTFILE (e.g. restart.chunk3), MDOT, FILLN, FNUM, DT,
+# CHECKPOINT_STEPS, and NCHUNKS (remaining chunks to run) with -var.
+# field.grid is appended to, not overwritten, so the dump history is kept.
+seed        8675309
+read_restart ${RESTARTFILE}
+global      mem/limit 1900
+mixture     hegas He nrho 1.0e22 temp 4.0
+mixture     fillgas He nrho ${FILLN} temp 4.0
+global      fnum ${FNUM}
+collide     vss hegas he.vss
+surf_collide walls diffuse 4.0 1.0
+fix         bal balance 5000 1.1 rcb time
+global      particle/reorder 100
+fix         src emit/surf hegas cap normal yes mflow ${MDOT} 4.0
+compute     cg grid all hegas nrho u v w
+compute     tg thermal/grid all hegas temp
+fix         ag ave/grid all 10 100 1000 c_cg[*] c_tg[*]
+dump        gd grid all ${DUMPFREQ} field.grid id xc yc zc xlo ylo zlo xhi yhi zhi f_ag[*]
+dump_modify gd append yes
+stats       1000
+stats_style step cpu np nattempt ncoll f_src[1] f_src[2]
+stats_modify flush yes
+timestep    ${DT}
+
+variable    loop_i loop ${NCHUNKS}
+label       loop
+run         ${CHECKPOINT_STEPS}
+write_restart restart.%.*
+next        loop_i
+jump        SELF loop

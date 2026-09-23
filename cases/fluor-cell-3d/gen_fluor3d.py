@@ -66,6 +66,11 @@ MM_TO_M = 1e-3
 # SPARTA's cut3d cell-cutter (CH: Edge not part of 2 vertices) even after
 # the mesh passed the global watertight check. Excluding them removes that
 # crash with zero effect on the actual gas-flow boundary.
+# CORRECTION: the top face is NOT continuous -- the housing has a 30 x 7mm
+# window slot (x 42-72mm, y 15-23mm) running from z=38.1 down into the
+# chamber, which the excluded window seals. Excluding it left that slot
+# open and ~70% of the neon escaped through it. Run seal_top_slot.py on
+# this script's output (-> cell_fluor3d_sealed.surf) before using it.
 EXCLUDED_SOLID_IDXS = {1, 4}
 
 # Buffer gas inlet cap (solid #6, 1.588mm hole, true opening at (34.290,25.400,0.000))

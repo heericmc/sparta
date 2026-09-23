@@ -9,6 +9,20 @@ Writes two small XML VTK files (a few MB, not the 100+MB raw field.grid):
   <out_prefix>_field.vtr  -- RectilinearGrid, point data: u,v,w,nrho,temp
   <out_prefix>_walls.vtp  -- PolyData, the housing wall mesh
 
+No masking/filtering is applied here -- two attempts at an automatic
+"discard untrustworthy cells" filter (a fixed 5mm shell around the cavity
+boundary, then a flat simulated-particle-count threshold) were each tried
+and found to fail in opposite directions on this case's real settled field:
+the shell approach deleted real, physically continuous flow (a genuine
+recirculation gradient approaching the outlet from mid-cavity, confirmed
+smooth and well-sampled); the particle-count threshold deleted the
+legitimate exterior plume too, since it is real but inherently low-density
+far from the ports. Neither is a substitute for looking at nrho alongside
+velocity when interpreting the render -- exported here for exactly that,
+not filtered away. See docs/fluor-cell-3d-molecules-findings.md (or ask
+Claude in the HPC session that produced this run) for what's known so far
+about which regions are trustworthy.
+
 Usage:
   python tools/export_vtk.py RUN_DIR --surf cell_fluor3d.surf --out-prefix OUT
       [--timestep N] [--frac F]

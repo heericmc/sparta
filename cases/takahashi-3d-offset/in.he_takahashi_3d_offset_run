@@ -1,0 +1,53 @@
+# First full-length 3D reproduction attempt of the on-axis Takahashi cell
+# (same geometry/physics as the validated 2D-axisymmetric case, revolved
+# into true 3D -- no axisymmetric ring-averaging trick). Same coarse
+# 2-level mesh as in.he_takahashi_3d_scoping (this is NOT yet the
+# production-resolution mesh -- that comes after this first sanity check).
+#
+# Checkpointed: writes a full SPARTA restart file every CHECKPOINT_STEPS
+# (in addition to the running field.grid dump), so a job killed early
+# (walltime limit, node failure, preemption) does not lose all progress --
+# resume with in.he_takahashi_3d_resume from the latest restart.<step> file.
+# Pass MDOT (kg/s), FILLN (m^-3), FNUM, DT (s), STEPS (total), and
+# CHECKPOINT_STEPS with -var.
+variable    SEED index 8675309
+seed        ${SEED}
+units       si
+dimension   3
+boundary    o o o
+global      gridcut 0.0
+create_box  -0.02 0.1544 -0.06552 0.06552 -0.06552 0.06552
+region      L4 block -0.0045 0.075 -0.00815 0.00815 -0.00815 0.00815
+create_grid 109 126 126 levels 2 region 2 L4 4 4 4 inside any
+balance_grid rcb cell
+global      mem/limit 1900
+species     he.species He
+mixture     hegas He nrho 1.0e22 temp 4.0
+mixture     fillgas He nrho ${FILLN} temp 4.0
+global      fnum ${FNUM}
+collide     vss hegas he.vss
+read_surf   cell_takahashi_3d_offset.surf type group cellwalls clip
+surf_collide walls diffuse 4.0 1.0
+surf_modify cellwalls collide walls
+group       cap surf type 2
+region      gas block -0.0199 0.0535 -0.00715 0.00715 -0.00715 0.00715
+create_particles fillgas n 0 region gas
+balance_grid rcb part
+fix         bal balance 5000 1.1 rcb time
+global      particle/reorder 100
+fix         src emit/surf hegas cap normal yes mflow ${MDOT} 4.0
+compute     cg grid all hegas nrho u v w
+compute     tg thermal/grid all hegas temp
+fix         ag ave/grid all 10 100 1000 c_cg[*] c_tg[*]
+dump        gd grid all ${DUMPFREQ} field.grid id xc yc zc xlo ylo zlo xhi yhi zhi f_ag[*]
+stats       1000
+stats_style step cpu np nattempt ncoll f_src[1] f_src[2]
+stats_modify flush yes
+timestep    ${DT}
+
+variable    loop_i loop ${NCHUNKS}
+label       loop
+run         ${CHECKPOINT_STEPS}
+write_restart restart.%.*
+next        loop_i
+jump        SELF loop
