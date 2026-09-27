@@ -45,6 +45,8 @@ using Statistics
 
 import Base: convert
 
+include("sigma_table.jl")
+
 # ---- Statistics machinery: identical to ParticleTracing.jl ----
 
 struct TrajStats
@@ -193,19 +195,31 @@ function parse_commandline()
             arg_type = Float64
             default = 156.325
         "--sigma"
-            help = "constant collision cross section (m^2), used only when --sigma-energy-dependent is 0"
+            help = "constant collision cross section (m^2), used only with --sigma-model const (or the legacy --sigma-energy-dependent 0)"
             arg_type = Float64
             default = 2.0e-18
+        "--sigma-model"
+            help = "cross-section model: table (default; log-log interpolation of the drag-matched BaF+-Ne cross section in --sigma-table -- see tools/cross_section/ and the handoff doc), edep (the previous model: --sigma-low below the local thermal speed, 1/v above, floored at --sigma-high), or const (--sigma)"
+            arg_type = String
+            default = "table"
+        "--sigma-table"
+            help = "cross-section table for --sigma-model table: columns E_cm/k_B (K), then central/low/high sigma (m^2)"
+            arg_type = String
+            default = joinpath(@__DIR__, "data", "bafplus_ne_sigma_tracer.tsv")
+        "--sigma-table-variant"
+            help = "which table column to use: central (default), low or high (short-range wall uncertainty bracket; identical below ~150 K)"
+            arg_type = String
+            default = "central"
         "--sigma-energy-dependent"
-            help = "if nonzero (default), scale the cross section with collision speed instead of holding it constant: sigma-low near/below the local thermal speed (where the literature-anchored value is actually valid), falling off as 1/v (Langevin capture scaling) down to a sigma-high floor at high relative speed (repulsive-core regime, e.g. early in a hot ion's trajectory). Set to 0 to fall back to the old constant --sigma behavior."
+            help = "legacy switch kept for old job scripts: 0 forces --sigma-model const; nonzero (default) leaves --sigma-model in charge"
             arg_type = Int
             default = 1
         "--sigma-low"
-            help = "cross section (m^2) at/below the local buffer-gas thermal speed, in energy-dependent mode"
+            help = "cross section (m^2) at/below the local buffer-gas thermal speed, in --sigma-model edep"
             arg_type = Float64
             default = 2.0e-18
         "--sigma-high"
-            help = "cross section (m^2) floor at high relative speed, in energy-dependent mode"
+            help = "cross section (m^2) floor at high relative speed, in --sigma-model edep"
             arg_type = Float64
             default = 1.5e-19
         "--saveall"
@@ -259,9 +273,20 @@ const MASS_BUFFER_GAS = args["m"]
 const MASS_REDUCED = MASS_PARTICLE * MASS_BUFFER_GAS / (MASS_PARTICLE + MASS_BUFFER_GAS)
 const kB = 8314.46
 const σ_BUFFER_GAS_PARTICLE = args["sigma"]
-const SIGMA_ENERGY_DEPENDENT = args["sigma-energy-dependent"] != 0
+const SIGMA_MODEL = args["sigma-energy-dependent"] == 0 ? "const" : args["sigma-model"]
+SIGMA_MODEL in ("table", "edep", "const") || error("--sigma-model must be table, edep or const")
+const SIGMA_TABLE = SIGMA_MODEL == "table"
+const SIGMA_EDEP = SIGMA_MODEL == "edep"
 const SIGMA_LOW = args["sigma-low"]
 const SIGMA_HIGH_FLOOR = args["sigma-high"]
+if SIGMA_TABLE && args["sigma-table"] == joinpath(@__DIR__, "data", "bafplus_ne_sigma_tracer.tsv") &&
+        (abs(MASS_BUFFER_GAS - 20.1797) > 0.5 || abs(MASS_PARTICLE - 156.325) > 1.0)
+    error("the default --sigma-table is computed for BaF+ in neon; pass a table for this particle/gas pair or use --sigma-model edep/const")
+end
+const SIGMA_LOGE, SIGMA_LOGQ = SIGMA_TABLE ?
+    load_sigma_table(args["sigma-table"], args["sigma-table-variant"]) : (Float64[], Float64[])
+@printf(stderr, "cross-section model: %s%s\n", SIGMA_MODEL,
+    SIGMA_TABLE ? " ($(args["sigma-table"]), $(args["sigma-table-variant"]))" : "")
 const TRAJPRINT = args["trajprint"]
 TRAJPRINT > 100 && @printf(stderr,
     "WARNING: --trajprint %d records all collision legs and can produce large output.\n", TRAJPRINT)
@@ -421,6 +446,10 @@ end
 """
     sigma_of_speed(vcoll, T)
 
+LEGACY model (--sigma-model edep), superseded by the default --sigma-model table;
+kept for comparison with earlier runs. Its 1.5e-19 floor overestimates the cross
+section 2-3x above ~200 eV lab (see docs/hpc-fluor-cell-3d-molecules-handoff.md).
+
 Energy-dependent cross section: SIGMA_LOW at/below the local buffer-gas
 thermal speed (sqrt(8kT/(pi*m_gas)), the same quantity already used
 below for the mean relative speed -- this is exactly the regime the
@@ -464,7 +493,15 @@ end
 
 @inline function freePath(v, vrel, T, ρ)
     vcoll = sqrt(8*kB*T/(MASS_BUFFER_GAS*pi) + vrel^2)
-    σ = SIGMA_ENERGY_DEPENDENT ? sigma_of_speed(vcoll, T) : σ_BUFFER_GAS_PARTICLE
+    σ = if SIGMA_TABLE
+        # the table holds the drag-matched sigma_t(E_cm) for this rate/partner/isotropic-
+        # scattering scheme (see the table header), evaluated at E_cm = mu vcoll^2 / 2
+        sigma_from_table(SIGMA_LOGE, SIGMA_LOGQ, MASS_REDUCED * vcoll^2 / (2 * kB))
+    elseif SIGMA_EDEP
+        sigma_of_speed(vcoll, T)
+    else
+        σ_BUFFER_GAS_PARTICLE
+    end
     λ = sqrt(v[1]^2 + v[2]^2 + v[3]^2)/(ρ*σ*vcoll)
     return min(-log(Random.rand()) * λ, 1000.0)
 end

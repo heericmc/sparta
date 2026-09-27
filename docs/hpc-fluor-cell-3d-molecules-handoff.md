@@ -74,9 +74,9 @@ julia --project=../../tracer --threads=4 ../../tracer/ParticleTracing3D.jl \
   --saveall 1 --seed 1
 ```
 
-(`--sigma-energy-dependent` defaults to on, using `--sigma-low`/`--sigma-high`
--- see section 3. No need to pass `--sigma` unless you deliberately want
-the old constant-cross-section mode for comparison.)
+(`--sigma-model table` is the default: the computed BaF+-Ne cross-section
+curve in `tracer/data/bafplus_ne_sigma_tracer.tsv` -- see section 3. The previous
+models are still available as `--sigma-model edep` and `--sigma-model const --sigma <value>`.)
 
 Check before anything else:
 - It runs without erroring. If it crashes on a range/bounds error, that's
@@ -99,9 +99,41 @@ Check before anything else:
 | `-m` (buffer gas mass) | `20.1797` amu | Neon, matches `ne.species` |
 | `--vx` | `24843.71` m/s | v = sqrt(2 * 500eV / m_BaF+); recompute if the injection energy changes |
 | `-x -y -z` | `0.03048 0.01905 0.01905` | Molecule-inlet port location (2.54mm channel, axial) |
-| `--sigma-low` | `2.0e-18` m^2 (default) | Cross section at/below the local buffer-gas thermal speed -- see below |
-| `--sigma-high` | `1.5e-19` m^2 (default) | Cross section floor at high relative speed -- see below |
+| `--sigma-model` | `table` (default) | Computed BaF+-Ne cross section vs collision energy -- see below |
+| `--sigma-table-variant` | `central` (default) | `low`/`high` bracket the short-range-wall uncertainty (only matters above ~1 eV) |
 | `-T` | `0.0` (default) | Perfectly monoenergetic, mono-directional beam. **This is a simplification, not a measurement** -- if the real source has known energy/angular spread, set a nonzero `-T` (adds a thermal-style spread around the mean velocity) or check whether that spread matters for your conclusion before assuming it doesn't. |
+
+**Cross section -- CURRENT (supersedes everything below).** The default is
+now `--sigma-model table`, a computed BaF+-Ne cross section covering the whole
+500 eV-to-thermal range (`tracer/data/bafplus_ne_sigma_tracer.tsv`; derivation and
+scripts in `tools/cross_section/`):
+
+- Physics: classical momentum-transfer cross section Q1(E) for a Ba+-Ne proxy
+  potential -- the CCSD(T)/CBS Ba+-Ne potential of Buchachenko & Viehland,
+  J. Chem. Phys. 148, 154304 (2018) (well + exact ion-induced-dipole C4 = alpha_Ne/2)
+  joined to the ZBL universal repulsion at short range. Checks: reproduces the
+  1.105 x Langevin polarization limit; agrees with ZBL/SRIM universal nuclear
+  stopping to 2-15% at 100-500 eV lab.
+- Tracer mapping: the file is NOT bare Q1. Because the tracer uses a flux-weighted
+  partner + isotropic scattering at rate n*sigma*v_coll, the table is the
+  drag-matched sigma_t(E_cm) that makes the tracer's mean drag equal the true
+  drag at every ion speed. It equals Q1 for fast ions and gives the correct thermal
+  diffusion coefficient at rest (2.0e-18 m^2 at 23 K). Bare Q1 is kept as
+  `tracer/data/bafplus_ne_q1.tsv` for reference only -- don't pass it to `--sigma-table`.
+- Key values (sigma_t): 2.0e-18 m^2 thermal (23 K), 1.0e-18 at E_cm 100 K,
+  2.2e-19 at 1 eV lab, 1.4e-19 at ~8 eV lab, 4.9e-20 at 500 eV lab.
+- Synthetic check (uniform 23 K, 2e22 m^-3 Ne, 500 eV injection, 20 ions): mean
+  stopping depth 14 mm (table) vs 8.8 mm (old edep), 11 mm (const 1.5e-19),
+  0.8 mm (const 2e-18); ~40 collisions to thermalize.
+- Uncertainty: thermal/low-energy end +-10-15% (set by exact long-range physics);
+  above ~1 eV +-30-40% (short-range wall) -- bracket with
+  `--sigma-table-variant low` and `high`. No BaF+-Ne cross section has been
+  measured; Ba+ stands in for BaF+.
+- The default table is only valid for BaF+ in Ne; the tracer refuses to start with
+  it for other masses.
+
+Run the `central` table as the main condition, plus `--sigma-table-variant low` and
+`high` as the uncertainty bracket. The older discussion below is kept for history.
 
 **Cross section -- revised, read this if you ran the transmission
 numbers from an earlier version of this doc.** The first version used a
